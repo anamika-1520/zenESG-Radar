@@ -2,6 +2,207 @@
 
 This document explains how the project works file by file, with special focus on the Daily Radar / top news fetcher flow, the database pipeline, the RAG search flow, and the important functions your teammate should understand first.
 
+## 0. Read This First - Daily News Is The Main Goal
+
+The main purpose of this project is to show ESG/regulatory daily news reliably. Other features like company assessment, ESG chat, and RAG search are useful, but the first priority is:
+
+```text
+Fetch ESG news -> save it in DB -> parse important regulations -> show them in Daily Radar
+```
+
+If a teammate only wants to understand or debug the daily news feature, they should start with these files and tables first.
+
+### Most Important Files For Daily News
+
+```text
+config.py
+```
+
+Holds RSS feed URLs, database path, keyword PDF path, and Chroma path. If news is not coming, first check `RSS_FEEDS`, `DATABASE`, and `KEYWORDS_PDF`.
+
+```text
+sustainability_keywords.pdf
+```
+
+Keyword source used to decide whether RSS articles are ESG-relevant. Bad/missing keywords means weak news fetching.
+
+```text
+keyword_extractor.py
+```
+
+Reads `sustainability_keywords.pdf` and extracts ESG keywords. Used by RSS ingestion and Tavily search.
+
+```text
+data_ingestion.py
+```
+
+Main RSS news fetcher. It reads feeds from `config.py`, checks keywords, and saves matched news into the `articles` table.
+
+```text
+parser.py
+```
+
+Reads saved RSS articles and uses Groq to convert them into structured regulation records in `parsed_articles`.
+
+```text
+tavily_collector.py
+```
+
+Fetches extra web intelligence using Tavily and saves it into `tavily_articles`.
+
+```text
+radar.py
+```
+
+Main Daily Radar UI. It does not fetch news itself. It reads `parsed_articles`, `articles`, and `tavily_articles` from SQLite and displays top regulatory updates.
+
+```text
+dashboard.py
+```
+
+Main Streamlit app. It creates the tabs and calls `render_daily_radar()` from `radar.py`.
+
+```text
+db_schema.py
+```
+
+Creates required database tables if they do not exist. Important for Docker/fresh setup so the app does not fail on empty DB.
+
+### Most Important Database Files
+
+```text
+esg_radar.db
+```
+
+Main SQLite database. Daily Radar depends heavily on this file.
+
+Important tables:
+
+```text
+articles
+```
+
+Raw RSS articles saved by `data_ingestion.py`.
+
+```text
+parsed_articles
+```
+
+Structured ESG/regulatory updates saved by `parser.py`. Daily Radar uses this table for the main regulatory news cards.
+
+```text
+tavily_articles
+```
+
+Web intelligence results saved by `tavily_collector.py`. Daily Radar uses this for the Latest Web Intelligence section.
+
+```text
+fetch_logs
+```
+
+RSS feed fetch history. Useful for debugging broken feeds or checking whether ingestion ran.
+
+### Daily News Flow
+
+```text
+config.py RSS_FEEDS
+        |
+        v
+keyword_extractor.py reads sustainability_keywords.pdf
+        |
+        v
+data_ingestion.py
+        |
+        v
+esg_radar.db -> articles
+        |
+        v
+parser.py
+        |
+        v
+esg_radar.db -> parsed_articles
+        |
+        v
+radar.py
+        |
+        v
+dashboard.py Daily Radar tab
+```
+
+Tavily web intelligence flow:
+
+```text
+sustainability_keywords.pdf
+        |
+        v
+tavily_collector.py
+        |
+        v
+esg_radar.db -> tavily_articles
+        |
+        v
+radar.py Latest Web Intelligence section
+```
+
+### Commands For Daily News Data
+
+Run these in order when building fresh daily news data:
+
+```powershell
+python data_ingestion.py
+python parser.py
+python tavily_collector.py
+python rag_pipeline.py
+streamlit run dashboard.py
+```
+
+For Docker:
+
+```powershell
+docker compose up --build
+```
+
+If running pipeline commands inside Docker:
+
+```powershell
+docker compose run --rm zenesg-radar python data_ingestion.py
+docker compose run --rm zenesg-radar python parser.py
+docker compose run --rm zenesg-radar python tavily_collector.py
+docker compose run --rm zenesg-radar python rag_pipeline.py
+```
+
+### Project File Structure
+
+```text
+zenESG-radar/
+  dashboard.py              Main Streamlit app and tab layout
+  radar.py                  Daily Radar / top news UI
+  data_ingestion.py         RSS feed ingestion
+  parser.py                 Groq-based article parser
+  tavily_collector.py       Tavily web intelligence collector
+  keyword_extractor.py      Extracts ESG keywords from PDF
+  sustainability_keywords.pdf
+                            Keyword source document
+  config.py                 RSS feeds, DB path, Chroma path, constants
+  db_schema.py              Creates required SQLite tables
+  rag_pipeline.py           Loads parsed/Tavily data into Chroma and searches it
+  qa_rag.py                 ESG chat agent and tools
+  impact_assesment.py       CLI company impact assessment
+  esg_radar.db              Main SQLite DB, required for existing news data
+  chroma_db/                Chroma vector index, required for existing RAG search
+  esg_articles.json         Historical/exported article data
+  Dockerfile                Docker image definition
+  docker-compose.yml        Local Docker run config
+  requirements.txt          Python dependencies
+  .env.example              Environment variable template
+  .env                      Local secrets, do not commit
+  .dockerignore             Files excluded from Docker build context
+  .gitignore                Files excluded from Git
+  PROJECT_WORKING_GUIDE.md  This project guide
+```
+
+Daily news depends most on `data_ingestion.py`, `parser.py`, `tavily_collector.py`, `radar.py`, `dashboard.py`, `esg_radar.db`, and the tables `articles`, `parsed_articles`, and `tavily_articles`.
+
 ## 1. Big Picture
 
 ZenESG Radar is an ESG regulatory intelligence app. It collects ESG-related news and regulatory updates, stores them in SQLite, converts raw news into structured regulatory data using Groq, indexes the structured content into ChromaDB, and exposes everything through a Streamlit dashboard.
@@ -1698,7 +1899,11 @@ Data source:
 
 ## 7. How to Run the Project
 
-There is no requirements file in the current repository, so dependencies must already be installed in the local virtual environment or installed manually.
+Install Python dependencies:
+
+```powershell
+pip install -r requirements.txt
+```
 
 Typical commands:
 
@@ -1717,6 +1922,40 @@ Recommended order:
 3. Run `tavily_collector.py`
 4. Run `rag_pipeline.py`
 5. Run `streamlit run dashboard.py`
+
+### Docker run option
+
+Docker is the easiest way for another teammate to run the app without manually installing Python packages.
+
+1. Copy `.env.example` to `.env`.
+2. Add valid `GROQ_API_KEY` and `TAVILY_API_KEY` values.
+3. Start the app:
+
+```powershell
+docker compose up --build
+```
+
+Then open:
+
+```text
+http://localhost:8501
+```
+
+Docker Compose stores generated runtime files in `data/`:
+
+- `data/esg_radar.db`
+- `data/chroma_db/`
+- `data/huggingface/`
+
+Useful Docker commands:
+
+```powershell
+docker compose run --rm zenesg-radar python data_ingestion.py
+docker compose run --rm zenesg-radar python parser.py
+docker compose run --rm zenesg-radar python tavily_collector.py
+docker compose run --rm zenesg-radar python rag_pipeline.py
+docker compose down
+```
 
 ## 8. External Services and Keys
 
@@ -1789,4 +2028,3 @@ Check:
 - `qa_rag.py` powers the chat agent.
 - `file1.py` looks like an alternate or older RAG implementation and is not used by the main app.
 - `esg_radar.db` and `chroma_db/` are generated data stores, not primary source code.
-
