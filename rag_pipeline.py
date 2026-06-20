@@ -4,10 +4,11 @@ import sqlite3
 from datetime import datetime
 
 import chromadb
+from chromadb.config import Settings
 from chromadb.errors import NotFoundError
-from sentence_transformers import SentenceTransformer
 
 from config import DATABASE, CHROMA_PATH, COLLECTION_NAME
+from db_schema import ensure_database_schema
 
 STOPWORDS = {
     "a", "an", "and", "are", "as", "at", "by",
@@ -15,11 +16,10 @@ STOPWORDS = {
     "the", "to", "with",
 }
 
-print("Loading embedding model...")
-model = SentenceTransformer("all-MiniLM-L6-v2")
-print("Model loaded!")
-
-chroma_client = chromadb.PersistentClient(path=CHROMA_PATH)
+chroma_client = chromadb.PersistentClient(
+    path=CHROMA_PATH,
+    settings=Settings(anonymized_telemetry=False),
+)
 
 # ============================================
 # COLLECTION
@@ -204,6 +204,7 @@ Query: {query_used or ""}
 
 def load_articles_to_chroma(rebuild=True):
     print("\nLoading all articles into ChromaDB...")
+    ensure_database_schema()
 
     conn = sqlite3.connect(DATABASE)
     cursor = conn.cursor()
@@ -405,6 +406,71 @@ def find_relevant_regulations(company_profile, top_k=10):
 
     ranked.sort(key=lambda item: item["score"], reverse=True)
     return ranked[:top_k]
+
+
+def build_daily_news_query(region_filter="All", impact_filter="All"):
+    parts = [
+        "latest ESG regulatory news",
+        "sustainability reporting updates",
+        "climate disclosure compliance",
+        "regulator deadline action required",
+        "high impact corporate ESG regulation",
+    ]
+    if region_filter != "All":
+        parts.append(f"jurisdiction {region_filter}")
+    if impact_filter != "All":
+        parts.append(f"{impact_filter.lower()} impact")
+    return " ".join(parts)
+
+
+def find_daily_news_candidates(region_filter="All", impact_filter="All", top_k=10):
+    collection = get_collection()
+    total = collection.count()
+    if total == 0:
+        return []
+
+    query = build_daily_news_query(region_filter, impact_filter)
+    n_results = min(total, max(top_k * 5, 25))
+    results = collection.query(
+        query_texts=[query],
+        n_results=n_results,
+        include=["metadatas", "documents", "distances"],
+    )
+
+    candidates = []
+    seen_article_ids = set()
+    for metadata, document, distance in zip(
+        results["metadatas"][0],
+        results["documents"][0],
+        results["distances"][0],
+    ):
+        if metadata.get("data_type") != "parsed":
+            continue
+
+        article_id = str(metadata.get("article_id") or "")
+        if not article_id or article_id in seen_article_ids:
+            continue
+
+        jurisdiction = str(metadata.get("jurisdiction") or "").lower()
+        impact = str(metadata.get("impact_level") or "").lower()
+        if region_filter != "All" and region_filter.lower() not in jurisdiction:
+            continue
+        if impact_filter != "All" and impact_filter.lower() != impact:
+            continue
+
+        seen_article_ids.add(article_id)
+        candidates.append(
+            {
+                "article_id": article_id,
+                "score": round(max(0.0, 1.0 - distance) * 100, 1),
+                "metadata": metadata,
+                "document": document,
+            }
+        )
+        if len(candidates) >= top_k:
+            break
+
+    return candidates
 
 # ============================================
 # DISPLAY

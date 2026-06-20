@@ -1,0 +1,17 @@
+services:
+  zenesg-radar:
+    build: .
+    container_name: zenesg-radar
+    ports:
+      - "8501:8501"
+    env_file:
+      - .env
+    environment:
+      DATABASE_PATH: /app/esg_radar.db
+      CHROMA_PATH: /app/chroma_db
+      STREAMLIT_SERVER_FILE_WATCHER_TYPE: none
+      ANONYMIZED_TELEMETRY: "False"
+    volumes:
+      - ./esg_radar.db:/app/esg_radar.db
+      - ./chroma_db:/app/chroma_db
+    restart: unless-stopped

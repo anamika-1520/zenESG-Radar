@@ -1,3 +1,6 @@
+import os
+
+
 # RSS Feed sources 
 RSS_FEEDS = [
     # ESG News
@@ -37,12 +40,12 @@ RSS_FEEDS = [
 KEYWORDS_PDF = "sustainability_keywords.pdf"
 
 
-DATABASE = "esg_radar.db"
+DATABASE = os.getenv("DATABASE_PATH", "esg_radar.db")
 
 FETCH_INTERVAL_HOURS = 6
 
 # Ek article ka description kitna lamba rakho
 MAX_DESCRIPTION_LENGTH = 500
 # ChromaDB settings
-CHROMA_PATH = "./chroma_db"
+CHROMA_PATH = os.getenv("CHROMA_PATH", "./chroma_db")
 COLLECTION_NAME = "esg_regulations"

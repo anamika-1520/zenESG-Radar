@@ -7,6 +7,7 @@ from html import escape
 import streamlit as st
 
 from config import DATABASE
+from db_schema import ensure_database_schema
 
 
 REGIONS = ["All", "India", "UK", "EU", "US", "Singapore", "Global"]
@@ -122,6 +123,45 @@ div[data-testid="stMetric"] {
 def fetch_rows(query, params=()):
     with closing(sqlite3.connect(DATABASE)) as conn:
         return conn.cursor().execute(query, params).fetchall()
+
+
+def fetch_parsed_update(article_id):
+    rows = fetch_rows(
+        """
+        SELECT
+            p.regulation_name,
+            p.jurisdiction,
+            p.impact_level,
+            p.change_type,
+            p.action_required,
+            p.summary,
+            p.regulator,
+            p.affected_sectors,
+            p.deadline,
+            a.title,
+            a.description,
+            a.source,
+            a.url,
+            a.fetched_at,
+            a.relevance_score
+        FROM parsed_articles p
+        JOIN articles a ON p.article_id = a.id
+        WHERE a.id = ?
+        """,
+        (article_id,),
+    )
+    return rows[0] if rows else None
+
+
+def fetch_rag_ranked_news(region_filter, impact_filter, limit):
+    from rag_pipeline import find_daily_news_candidates
+
+    news = []
+    for candidate in find_daily_news_candidates(region_filter, impact_filter, limit):
+        row = fetch_parsed_update(candidate["article_id"])
+        if row:
+            news.append((*row, candidate["score"]))
+    return news
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -246,13 +286,14 @@ def render_full_news_brief(
 
 
 def render_daily_radar():
+    ensure_database_schema()
     inject_radar_css()
     today = datetime.now().strftime("%B %d, %Y")
     st.markdown(
         f"""
 <div class="radar-hero">
   <h3>ESG Regulatory Radar - {today}</h3>
-  <p>Full news-style briefings from saved RSS articles and Tavily web intelligence.</p>
+  <p>RAG-ranked daily regulatory briefings from RSS articles and Tavily web intelligence.</p>
 </div>
 """,
         unsafe_allow_html=True,
@@ -273,63 +314,25 @@ def render_daily_radar():
     st.markdown("---")
 
     try:
-        query = """
-            SELECT
-                p.regulation_name,
-                p.jurisdiction,
-                p.impact_level,
-                p.change_type,
-                p.action_required,
-                p.summary,
-                p.regulator,
-                p.affected_sectors,
-                p.deadline,
-                a.title,
-                a.description,
-                a.source,
-                a.url,
-                a.fetched_at,
-                a.relevance_score
-            FROM parsed_articles p
-            JOIN articles a ON p.article_id = a.id
-            WHERE 1=1
-        """
-        params = []
-
-        if region_filter != "All":
-            query += " AND LOWER(p.jurisdiction) LIKE ?"
-            params.append(f"%{region_filter.lower()}%")
-
-        if impact_filter != "All":
-            query += " AND p.impact_level = ?"
-            params.append(impact_filter.lower())
-
-        query += """
-            ORDER BY
-                CASE p.impact_level
-                    WHEN 'high' THEN 1
-                    WHEN 'medium' THEN 2
-                    WHEN 'low' THEN 3
-                    ELSE 4
-                END,
-                a.fetched_at DESC
-            LIMIT ?
-        """
-        params.append(limit)
-        news = fetch_rows(query, params)
+        news = fetch_rag_ranked_news(region_filter, impact_filter, limit)
     except sqlite3.Error as exc:
         st.error(f"Database error: {exc}")
         return
+    except Exception as exc:
+        st.error(f"RAG daily news search failed: {exc}")
+        st.info("Run `python rag_pipeline.py` or `docker compose run --rm zenesg-radar python rag_pipeline.py` to rebuild ChromaDB.")
+        return
 
     if not news:
-        st.info("No regulatory updates found for this filter.")
+        st.info("No RAG-ranked regulatory updates found for this filter. Rebuild ChromaDB with `rag_pipeline.py` if fresh data was added.")
         return
 
     high_count = sum(1 for row in news if row[2] == "high")
     if high_count:
         st.error(f"{high_count} high impact regulation(s) need attention.")
 
-    st.markdown(f"### Top {len(news)} Regulatory Updates")
+    st.markdown(f"### Top {len(news)} RAG-Ranked Regulatory Updates")
+    st.caption("These updates are retrieved from ChromaDB and then enriched from SQLite for full source details.")
 
     for index, row in enumerate(news, 1):
         (
@@ -348,6 +351,7 @@ def render_daily_radar():
             url,
             fetched_at,
             relevance_score,
+            rag_score,
         ) = row
 
         heading = f"#{index} | {reg_name or 'General ESG'} | {(title or '')[:70]}"
@@ -369,7 +373,8 @@ def render_daily_radar():
                 f"Source: {source or 'Unknown'} | "
                 f"Fetched: {str(fetched_at)[:16] if fetched_at else 'N/A'} | "
                 f"Type: {change_type or 'update'} | "
-                f"Feed score: {relevance_score or 0}"
+                f"Feed score: {relevance_score or 0} | "
+                f"RAG score: {rag_score}%"
             )
 
             overview_tab, full_tab, compliance_tab = st.tabs(

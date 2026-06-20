@@ -1,8 +1,6 @@
-.env
+data/
+chroma_db/
 venv/
 __pycache__/
-*.py[cod]
 *.db
-chroma_db/
-.streamlit/secrets.toml
-
+.env

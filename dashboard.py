@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 from langchain_groq import ChatGroq
 from qa_rag import hybrid_search,agent
 from config import DATABASE
+from db_schema import ensure_database_schema
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 
 
@@ -488,6 +489,7 @@ def render_database_stats():
 
 
 def main():
+    ensure_database_schema()
     load_rag()
     render_header()
     render_sidebar()

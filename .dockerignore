@@ -1,0 +1,17 @@
+.env
+.git
+.agents
+.codex
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+env/
+.streamlit/secrets.toml
+*.db
+chroma_db/
+data/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.log
