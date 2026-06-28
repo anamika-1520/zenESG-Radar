@@ -4,10 +4,12 @@ import json
 import os
 from datetime import datetime
 from dotenv import load_dotenv
+from console_utils import configure_utf8_console
 from keyword_extractor import extract_keywords_from_pdf
 from config import DATABASE, KEYWORDS_PDF
 
 # Setup
+configure_utf8_console()
 load_dotenv()
 client = TavilyClient(api_key=os.getenv("TAVILY_API_KEY"))
 

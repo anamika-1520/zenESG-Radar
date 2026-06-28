@@ -9,9 +9,29 @@ services:
     environment:
       DATABASE_PATH: /app/esg_radar.db
       CHROMA_PATH: /app/chroma_db
+      HF_HOME: /app/data/huggingface
       STREAMLIT_SERVER_FILE_WATCHER_TYPE: none
       ANONYMIZED_TELEMETRY: "False"
     volumes:
       - ./esg_radar.db:/app/esg_radar.db
       - ./chroma_db:/app/chroma_db
+      - ./data/huggingface:/app/data/huggingface
     restart: unless-stopped
+
+  zenesg-scheduler:
+    build: .
+    container_name: zenesg-scheduler
+    command: ["python", "scheduler.py"]
+    env_file:
+      - .env
+    environment:
+      DATABASE_PATH: /app/esg_radar.db
+      CHROMA_PATH: /app/chroma_db
+      HF_HOME: /app/data/huggingface
+    volumes:
+      - ./esg_radar.db:/app/esg_radar.db
+      - ./chroma_db:/app/chroma_db
+      - ./data/huggingface:/app/data/huggingface
+    restart: unless-stopped
+    profiles:
+      - scheduler

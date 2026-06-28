@@ -1,6 +1,9 @@
 import os
 
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
 # RSS Feed sources 
 RSS_FEEDS = [
     # ESG News
@@ -37,15 +40,15 @@ RSS_FEEDS = [
 ]
 
 
-KEYWORDS_PDF = "sustainability_keywords.pdf"
+KEYWORDS_PDF = os.path.join(BASE_DIR, "sustainability_keywords.pdf")
 
 
-DATABASE = os.getenv("DATABASE_PATH", "esg_radar.db")
+DATABASE = os.getenv("DATABASE_PATH", os.path.join(BASE_DIR, "esg_radar.db"))
 
 FETCH_INTERVAL_HOURS = 6
 
 # Ek article ka description kitna lamba rakho
 MAX_DESCRIPTION_LENGTH = 500
 # ChromaDB settings
-CHROMA_PATH = os.getenv("CHROMA_PATH", "./chroma_db")
+CHROMA_PATH = os.getenv("CHROMA_PATH", os.path.join(BASE_DIR, "chroma_db"))
 COLLECTION_NAME = "esg_regulations"

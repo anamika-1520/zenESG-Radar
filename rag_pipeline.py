@@ -7,8 +7,11 @@ import chromadb
 from chromadb.config import Settings
 from chromadb.errors import NotFoundError
 
+from console_utils import configure_utf8_console
 from config import DATABASE, CHROMA_PATH, COLLECTION_NAME
 from db_schema import ensure_database_schema
+
+configure_utf8_console()
 
 STOPWORDS = {
     "a", "an", "and", "are", "as", "at", "by",
@@ -24,12 +27,11 @@ chroma_client = chromadb.PersistentClient(
 # ============================================
 # COLLECTION
 # ============================================
-
 def get_collection(rebuild=False):
     if rebuild:
         try:
             chroma_client.delete_collection(COLLECTION_NAME)
-        except NotFoundError:
+        except (ValueError, Exception):  # NotFoundError → ValueError
             pass
     return chroma_client.get_or_create_collection(
         name=COLLECTION_NAME,

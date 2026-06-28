@@ -1,21 +1,29 @@
-from groq import Groq
+from groq import AuthenticationError, Groq
 import sqlite3
 import json
 import time
 import os
 from datetime import datetime
 from dotenv import load_dotenv
+from console_utils import configure_utf8_console
 from config import DATABASE
 
 # Setup
-from groq import Groq
+from pathlib import Path
+load_dotenv(dotenv_path=Path(__file__).parent / ".env", override=True)
+configure_utf8_console()
+load_dotenv(dotenv_path=Path(__file__).parent / ".env", override=True)
 
-load_dotenv()
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+client = Groq(api_key=GROQ_API_KEY)
 
-client = Groq(
-    api_key=GROQ_API_KEY
-)
+
+def validate_groq_key():
+    if not GROQ_API_KEY:
+        raise RuntimeError("GROQ_API_KEY is missing from .env")
+
+    if not GROQ_API_KEY.startswith("gsk_"):
+        raise RuntimeError("GROQ_API_KEY does not look like a Groq API key")
 
 # ============================================
 # DATABASE
@@ -58,9 +66,9 @@ Article Text: {description}
 
 Return this exact JSON structure:
 {{
-    "regulation_name": "e.g. TCFD, CSRD, BRSR or null",
-    "jurisdiction": "e.g. UK, EU, India, Global or null",
-    "regulator": "e.g. FCA, SEC, SEBI or null",
+    "regulation_name": "Name of specific regulation if mentioned (e.g. TCFD, CSRD, BRSR). If no specific regulation is named, infer the most relevant framework from context (e.g. 'Paris Agreement', 'UN Climate Framework', 'SFDR', 'EU Taxonomy', 'UNFCCC'). Never return null — always infer something meaningful.",
+    "jurisdiction": "e.g. UK, EU, India, Global — infer from article context even if not explicitly stated. Never return null.",
+    "regulator": "Specific regulator if mentioned (e.g. FCA, SEC, SEBI). If not mentioned, infer the most likely governing body from context (e.g. 'UNFCCC', 'European Commission', 'UN General Assembly', 'National Government'). Never return null.",
     "change_type": "new_rule or rollback or update or proposal or other",
     "affected_sectors": ["sector1", "sector2"],
     "deadline": "deadline if mentioned or null",
@@ -72,11 +80,11 @@ Return this exact JSON structure:
     for attempt in range(retries):
         try:
             response = client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
+                model="llama-3.1-8b-instant",
                 messages=[
                     {
                         "role": "system",
-                        "content": "You are an ESG regulatory analyst. Always respond with valid JSON only."
+                        "content": "You are an ESG regulatory analyst. Always respond with valid JSON only. Never return null for regulation_name, jurisdiction, or regulator — always infer a meaningful value from context."
                     },
                     {
                         "role": "user",
@@ -88,8 +96,6 @@ Return this exact JSON structure:
             )
 
             text = response.choices[0].message.content.strip()
-
-            # Clean markdown if any
             text = text.replace("```json", "").replace("```", "").strip()
 
             return json.loads(text)
@@ -98,6 +104,9 @@ Return this exact JSON structure:
             print(f"   ⚠️  JSON error — attempt {attempt + 1}")
             time.sleep(2)
             continue
+
+        except AuthenticationError:
+            raise
 
         except Exception as e:
             error = str(e)
@@ -121,17 +130,29 @@ def run_parser():
     print(f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("="*50)
 
+    try:
+        validate_groq_key()
+    except RuntimeError as e:
+        print(f"\nError: {e}")
+        print("Update GROQ_API_KEY in .env, then run parser.py again.")
+        return
+
     conn = setup_db()
     cursor = conn.cursor()
 
-    # Sirf unparsed articles lo
+    # Unparsed + null wale dono lo
     cursor.execute("""
         SELECT a.id, a.title, a.description,
                a.source, a.relevance_score
         FROM articles a
         LEFT JOIN parsed_articles p
             ON a.id = p.article_id
-        WHERE p.article_id IS NULL
+        WHERE (
+            p.article_id IS NULL
+            OR p.regulation_name IS NULL
+            OR p.regulator IS NULL
+            OR p.jurisdiction IS NULL
+        )
         AND a.relevance_score >= 2
         ORDER BY a.relevance_score DESC
     """)
@@ -152,12 +173,17 @@ def run_parser():
         print(f"   📰 {title[:55]}...")
         print(f"   Source: {source} | Score: {score}")
 
-        result = parse_article(title, desc)
+        try:
+            result = parse_article(title, desc)
+        except AuthenticationError:
+            print("\nError: Groq rejected GROQ_API_KEY with 401 Unauthorized.")
+            print("Create or copy a valid Groq API key into .env, then run parser.py again.")
+            break
 
         if result:
             try:
                 cursor.execute("""
-                    INSERT OR IGNORE INTO parsed_articles (
+                    INSERT OR REPLACE INTO parsed_articles (
                         article_id, regulation_name,
                         jurisdiction, regulator,
                         change_type, affected_sectors,
@@ -166,9 +192,9 @@ def run_parser():
                     ) VALUES (?,?,?,?,?,?,?,?,?,?)
                 """, (
                     art_id,
-                    result.get("regulation_name"),
-                    result.get("jurisdiction"),
-                    result.get("regulator"),
+                    result.get("regulation_name") or "General ESG",
+                    result.get("jurisdiction") or "Global",
+                    result.get("regulator") or "Not specified",
                     result.get("change_type"),
                     json.dumps(result.get("affected_sectors", [])),
                     result.get("deadline"),
@@ -191,7 +217,6 @@ def run_parser():
         else:
             failed += 1
 
-        # Small gap between requests
         time.sleep(1)
 
     # Summary

@@ -8,8 +8,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     STREAMLIT_SERVER_FILE_WATCHER_TYPE=none \
     STREAMLIT_BROWSER_GATHER_USAGE_STATS=false \
     ANONYMIZED_TELEMETRY=False \
-    DATABASE_PATH=/app/data/esg_radar.db \
-    CHROMA_PATH=/app/data/chroma_db \
+    DATABASE_PATH=/app/esg_radar.db \
+    CHROMA_PATH=/app/chroma_db \
     HF_HOME=/app/data/huggingface
 
 WORKDIR /app

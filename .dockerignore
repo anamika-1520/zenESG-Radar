@@ -9,9 +9,13 @@ venv/
 env/
 .streamlit/secrets.toml
 *.db
+*.sqlite
+*.sqlite3
 chroma_db/
 data/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
 *.log
+.DS_Store
+Thumbs.db

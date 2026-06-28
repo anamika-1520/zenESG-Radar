@@ -5,6 +5,7 @@ import json
 import schedule
 import time
 from datetime import datetime
+from console_utils import configure_utf8_console
 from keyword_extractor import extract_keywords_from_pdf
 from config import (
     RSS_FEEDS, 
@@ -12,6 +13,8 @@ from config import (
     FETCH_INTERVAL_HOURS,
     MAX_DESCRIPTION_LENGTH
 )
+
+configure_utf8_console()
 
 # ============================================
 # DATABASE SETUP
@@ -60,7 +63,7 @@ def clean_text(text):
     if not text:
         return ""
     text = re.sub('<.*?>', '', text)
-    text = re.sub('\s+', ' ', text)
+    text = re.sub(r'\s+', ' ', text)
     return text.strip()
 
 def check_relevance(title, description, keywords):
