@@ -1,65 +1,27 @@
 import feedparser
-import sqlite3
 import re
 import json
-import schedule
-import time
+import socket
 from datetime import datetime
 from console_utils import configure_utf8_console
 from keyword_extractor import extract_keywords_from_pdf
+from db_schema import get_connection, ensure_database_schema
 from config import (
-    RSS_FEEDS, 
-    DATABASE, 
+    RSS_FEEDS,
     FETCH_INTERVAL_HOURS,
     MAX_DESCRIPTION_LENGTH
 )
 
 configure_utf8_console()
 
-# ============================================
-# DATABASE SETUP
-# ============================================
-
-def setup_database():
-    """create database and tables if not exist """
-    conn = sqlite3.connect(DATABASE)
-    cursor = conn.cursor()
-    
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS articles (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            title TEXT NOT NULL,
-            description TEXT,
-            url TEXT UNIQUE,
-            source TEXT,
-            published TEXT,
-            matched_keywords TEXT,
-            relevance_score INTEGER DEFAULT 0,
-            fetched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS fetch_logs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            source_url TEXT,
-            total_articles INTEGER,
-            relevant_articles INTEGER,
-            status TEXT,
-            fetched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    
-    conn.commit()
-    print("✅ Database ready!")
-    return conn
+# Global timeout
+socket.setdefaulttimeout(10)
 
 # ============================================
 # ARTICLE PROCESSING
 # ============================================
 
 def clean_text(text):
-    """remove HTML tags aur extra spaces"""
     if not text:
         return ""
     text = re.sub('<.*?>', '', text)
@@ -67,81 +29,111 @@ def clean_text(text):
     return text.strip()
 
 def check_relevance(title, description, keywords):
-    """
-   check how many keywords match title and discription mein. return matched keywords aur relevance score (number of matches)
-    """
     text = (title + " " + description).lower()
     matched = []
-    
     for keyword in keywords:
         if keyword.lower() in text:
             matched.append(keyword)
-    
     return matched, len(matched)
 
 def save_article(conn, article):
-    """save article to database."""
     cursor = conn.cursor()
+    from config import get_db_type
+    is_postgres = get_db_type() == "postgres"
+    
     try:
-        cursor.execute("""
-            INSERT INTO articles 
-            (title, description, url, source, 
-             published, matched_keywords, relevance_score)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (
-            article['title'],
-            article['description'],
-            article['url'],
-            article['source'],
-            article['published'],
-            json.dumps(article['matched_keywords']),
-            article['relevance_score']
-        ))
+        if is_postgres:
+            cursor.execute("""
+                INSERT INTO articles 
+                (title, description, url, source, 
+                 published, matched_keywords, relevance_score)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (url) DO NOTHING
+            """, (
+                article['title'],
+                article['description'],
+                article['url'],
+                article['source'],
+                article['published'],
+                json.dumps(article['matched_keywords']),
+                article['relevance_score']
+            ))
+        else:
+            cursor.execute("""
+                INSERT INTO articles 
+                (title, description, url, source, 
+                 published, matched_keywords, relevance_score)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (
+                article['title'],
+                article['description'],
+                article['url'],
+                article['source'],
+                article['published'],
+                json.dumps(article['matched_keywords']),
+                article['relevance_score']
+            ))
         conn.commit()
         return True
-    except sqlite3.IntegrityError:
-        return False  # Duplicate
+    except Exception:
+        conn.rollback()
+        return False
 
 def log_fetch(conn, source_url, total, relevant, status):
-    """Fetch history save karo"""
     cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO fetch_logs 
-        (source_url, total_articles, relevant_articles, status)
-        VALUES (?, ?, ?, ?)
-    """, (source_url, total, relevant, status))
-    conn.commit()
+    from config import get_db_type
+    is_postgres = get_db_type() == "postgres"
+    
+    try:
+        if is_postgres:
+            cursor.execute("""
+                INSERT INTO fetch_logs 
+                (source_url, total_articles, relevant_articles, status)
+                VALUES (%s, %s, %s, %s)
+            """, (source_url, total, relevant, status))
+        else:
+            cursor.execute("""
+                INSERT INTO fetch_logs 
+                (source_url, total_articles, relevant_articles, status)
+                VALUES (?, ?, ?, ?)
+            """, (source_url, total, relevant, status))
+        conn.commit()
+    except Exception:
+        conn.rollback()
 
 # ============================================
 # MAIN FETCHER
 # ============================================
 
 def fetch_from_feed(feed_url, keywords, conn):
-    """fetch karo feed, check relevance, save karo database mein, aur log karo"""
     try:
-        feed = feedparser.parse(feed_url)
+        socket.setdefaulttimeout(10)
+        feed = feedparser.parse(
+            feed_url,
+            agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+        )
+
+        if not feed.entries:
+            print(f"  ⚠️ Empty/timeout: {feed_url[:50]}")
+            return 0
+
         source_name = feed.feed.get('title', feed_url)
-        
         total = len(feed.entries)
         relevant_count = 0
         new_count = 0
-        
+
         for entry in feed.entries:
             title = entry.get('title', '')
             description = clean_text(
                 entry.get('description', '') or
                 entry.get('summary', '')
             )[:MAX_DESCRIPTION_LENGTH]
-            
+
             url = entry.get('link', '')
-            published = entry.get('published', 
-                        str(datetime.now()))
-            
-            # Relevance check karo
-            matched_kws, score = check_relevance(
-                title, description, keywords
-            )
-            
+            published = entry.get('published', str(datetime.now()))
+
+            matched_kws, score = check_relevance(title, description, keywords)
+
             if score > 0:
                 relevant_count += 1
                 article = {
@@ -153,104 +145,90 @@ def fetch_from_feed(feed_url, keywords, conn):
                     "matched_keywords": matched_kws,
                     "relevance_score": score
                 }
-                
                 if save_article(conn, article):
                     new_count += 1
-        
-        # Log karo
-        log_fetch(conn, feed_url, total, 
-                 relevant_count, "success")
-        
+
+        log_fetch(conn, feed_url, total, relevant_count, "success")
+
         print(f"  ✅ {source_name[:30]}")
-        print(f"     Total: {total} | "
-              f"Relevant: {relevant_count} | "
-              f"New: {new_count}")
-        
+        print(f"     Total: {total} | Relevant: {relevant_count} | New: {new_count}")
+
         return relevant_count
-        
+
     except Exception as e:
-        log_fetch(conn, feed_url, 0, 0, f"error: {e}")
+        try:
+            log_fetch(conn, feed_url, 0, 0, f"error: {str(e)[:100]}")
+        except Exception:
+            pass
         print(f"  ❌ Failed: {feed_url[:50]}")
-        print(f"     Error: {e}")
+        print(f"     Error: {str(e)[:60]}")
         return 0
 
+# ============================================
+# MAIN
+# ============================================
+
 def run_ingestion():
-    """Main function — fatch all feeds and process"""
     print("\n" + "="*50)
     print("🌍 ZenESG Regulatory Radar")
     print(f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("="*50)
-    
-    # Step 1: PDF se keywords lo
-    print("\n📚 Step 1: loading keywords...")
+
+    print("\n📚 Step 1: Loading keywords...")
     keywords = extract_keywords_from_pdf()
     print(f"✅ {len(keywords)} keywords ready!")
-    
-    # Step 2: Database setup
+
     print("\n🗄️  Step 2: Database setup...")
-    conn = setup_database()
-    
-    # Step 3: Sab feeds fetch karo
-    print(f"\n📡 Step 3: {len(RSS_FEEDS)} fatching from feeds")
-    
+    ensure_database_schema()
+    conn = get_connection()
+    print("✅ Database ready!")
+
+    print(f"\n📡 Step 3: Fetching from {len(RSS_FEEDS)} feeds...")
+
     total_relevant = 0
-    working_feeds = 0
-    
     for feed_url in RSS_FEEDS:
         count = fetch_from_feed(feed_url, keywords, conn)
         total_relevant += count
-        if count >= 0:
-            working_feeds += 1
-    
-    # Summary
+
     print("\n" + "="*50)
     print("📊 SUMMARY")
     print("="*50)
     print(f"✅ Sources checked : {len(RSS_FEEDS)}")
-    print(f"✅ ESG articles     : {total_relevant}")
-    
-    # Top articles dikhao
+    print(f"✅ ESG articles    : {total_relevant}")
+
+    # Top articles
+    from config import get_db_type
+    is_postgres = get_db_type() == "postgres"
     cursor = conn.cursor()
-    cursor.execute("""
-        SELECT title, source, relevance_score, 
-               matched_keywords
-        FROM articles 
-        ORDER BY relevance_score DESC, 
-                 fetched_at DESC
-        LIMIT 5
-    """)
-    
+
+    if is_postgres:
+        cursor.execute("""
+            SELECT title, source, relevance_score, matched_keywords
+            FROM articles
+            ORDER BY relevance_score DESC, fetched_at DESC
+            LIMIT 5
+        """)
+    else:
+        cursor.execute("""
+            SELECT title, source, relevance_score, matched_keywords
+            FROM articles
+            ORDER BY relevance_score DESC, fetched_at DESC
+            LIMIT 5
+        """)
+
     rows = cursor.fetchall()
     if rows:
         print("\n🏆 TOP 5 MOST RELEVANT ARTICLES:")
         for i, row in enumerate(rows, 1):
-            kws = json.loads(row[3])[:3]
+            try:
+                kws = json.loads(row[2] if is_postgres else row[3])[:3]
+            except Exception:
+                kws = []
             print(f"\n{i}. {row[0][:60]}")
             print(f"   Source: {row[1]}")
-            print(f"   Score: {row[2]} | "
-                  f"Keywords: {', '.join(kws)}")
-    
-    conn.close()
-    print("\n✅ Done! Next run in "
-          f"{FETCH_INTERVAL_HOURS} hours")
 
-# ============================================
-# SCHEDULER
-# ============================================
+    conn.close()
+    print("\n✅ Ingestion complete!")
 
 if __name__ == "__main__":
-    # Pehli baar abhi run karo
     run_ingestion()
-    
-    # Phir har 6 ghante automatically
-    schedule.every(FETCH_INTERVAL_HOURS).hours.do(
-        run_ingestion
-    )
-    
-    print(f"\n⏰ Scheduler started!")
-    print(f"Next run in {FETCH_INTERVAL_HOURS} hours")
-    print("Ctrl+C se band karo\n")
-    
-    while True:
-        schedule.run_pending()
-        time.sleep(60) # Check every minute for pending tasks
