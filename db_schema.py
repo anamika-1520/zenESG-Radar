@@ -1,16 +1,30 @@
+import os
 import sqlite3
+from config import DATABASE, DATABASE_URL, get_db_type
 
-from config import DATABASE
+try:
+    import psycopg2
+    import psycopg2.extras
+    PSYCOPG2_AVAILABLE = True
+except ImportError:
+    PSYCOPG2_AVAILABLE = False
 
+def get_connection():
+    if get_db_type() == "postgres" and PSYCOPG2_AVAILABLE:
+        return psycopg2.connect(DATABASE_URL)
+    else:
+        return sqlite3.connect(DATABASE)
 
 def ensure_database_schema():
-    conn = sqlite3.connect(DATABASE)
+    conn = get_connection()
     cursor = conn.cursor()
-
-    cursor.execute(
-        """
+    
+    is_postgres = get_db_type() == "postgres" and PSYCOPG2_AVAILABLE
+    pk = "SERIAL PRIMARY KEY" if is_postgres else "INTEGER PRIMARY KEY AUTOINCREMENT"
+    
+    cursor.execute(f"""
         CREATE TABLE IF NOT EXISTS articles (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id {pk},
             title TEXT NOT NULL,
             description TEXT,
             url TEXT UNIQUE,
@@ -20,26 +34,22 @@ def ensure_database_schema():
             relevance_score INTEGER DEFAULT 0,
             fetched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
-        """
-    )
+    """)
 
-    cursor.execute(
-        """
+    cursor.execute(f"""
         CREATE TABLE IF NOT EXISTS fetch_logs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id {pk},
             source_url TEXT,
             total_articles INTEGER,
             relevant_articles INTEGER,
             status TEXT,
             fetched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
-        """
-    )
+    """)
 
-    cursor.execute(
-        """
+    cursor.execute(f"""
         CREATE TABLE IF NOT EXISTS parsed_articles (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id {pk},
             article_id INTEGER UNIQUE,
             regulation_name TEXT,
             jurisdiction TEXT,
@@ -52,13 +62,11 @@ def ensure_database_schema():
             action_required TEXT,
             parsed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
-        """
-    )
+    """)
 
-    cursor.execute(
-        """
+    cursor.execute(f"""
         CREATE TABLE IF NOT EXISTS tavily_articles (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id {pk},
             title TEXT,
             content TEXT,
             url TEXT UNIQUE,
@@ -67,13 +75,11 @@ def ensure_database_schema():
             relevance_score REAL,
             fetched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
-        """
-    )
+    """)
 
-    cursor.execute(
-        """
+    cursor.execute(f"""
         CREATE TABLE IF NOT EXISTS impact_assessments (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id {pk},
             company_name TEXT,
             company_sector TEXT,
             company_jurisdiction TEXT,
@@ -81,8 +87,8 @@ def ensure_database_schema():
             regulations_used TEXT,
             assessed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
-        """
-    )
+    """)
 
     conn.commit()
     conn.close()
+    print(f"✅ Schema ready — DB type: {'PostgreSQL' if is_postgres else 'SQLite'}")

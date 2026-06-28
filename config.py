@@ -1,8 +1,9 @@
 import os
+from dotenv import load_dotenv
 
+load_dotenv()
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-
 
 # RSS Feed sources 
 RSS_FEEDS = [
@@ -39,16 +40,16 @@ RSS_FEEDS = [
     "https://www.theguardian.com/environment/sustainability/rss",
 ]
 
-
 KEYWORDS_PDF = os.path.join(BASE_DIR, "sustainability_keywords.pdf")
 
-
+DATABASE_URL = os.getenv("DATABASE_URL")
 DATABASE = os.getenv("DATABASE_PATH", os.path.join(BASE_DIR, "esg_radar.db"))
 
 FETCH_INTERVAL_HOURS = 6
-
-# Ek article ka description kitna lamba rakho
 MAX_DESCRIPTION_LENGTH = 500
-# ChromaDB settings
+
 CHROMA_PATH = os.getenv("CHROMA_PATH", os.path.join(BASE_DIR, "chroma_db"))
 COLLECTION_NAME = "esg_regulations"
+
+def get_db_type():
+    return "postgres" if DATABASE_URL else "sqlite"
