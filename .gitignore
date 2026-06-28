@@ -17,18 +17,14 @@ htmlcov/
 
 .streamlit/secrets.toml
 
-*.db
-*.sqlite
-*.sqlite3
-chroma_db/
-data/
+
 *.log
 
 .DS_Store
 Thumbs.db
 .env
-chroma_db/
+
 __pycache__/
-*.db
+
 venv/
 .venv/
